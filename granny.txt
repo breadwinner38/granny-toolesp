@@ -9,7 +9,7 @@ local Camera = Workspace.CurrentCamera
 -- Configuration
 local UPDATE_RATE = 1.0 
 local PATH_ENEMY = {"Map", "Players", "Enemy"} 
-local TARGET_DRESS = "Dress" 
+local TARGET_PART_NAME = "UpperTorso" -- Target changed from Dress to UpperTorso
 
 -- Visuals
 local COLOR_TOOL = Color3.new(0, 1, 0)       -- Green (Tools)
@@ -18,7 +18,7 @@ local OPACITY = 0.5
 
 -- State
 local ToolCache = {} 
-local DressPartCache = {} 
+local EnemyPartCache = {} 
 
 -- Helper: Trace folder
 local function GetFolder(pathArray)
@@ -44,25 +44,18 @@ task.spawn(function()
     print("Dynamic ESP Scanner Started...")
     while true do
         -- 1. DYNAMIC TOOL SCANNER
-        -- Logic: Check Workspace.Map -> [ANY_FOLDER] -> Tools
         local tCache = {}
         local mapFolder = Workspace:FindFirstChild("Map")
         
         if mapFolder then
             pcall(function()
-                -- Loop through House, Garage, etc.
                 for _, location in ipairs(mapFolder:GetChildren()) do
-                    -- Check if this location has a "Tools" folder
                     local toolsContainer = location:FindFirstChild("Tools")
-                    
                     if toolsContainer then
-                        -- Found a Tools folder, scan it
                         for _, obj in ipairs(toolsContainer:GetDescendants()) do
                             if obj.ClassName == "Tool" or obj.ClassName == "Model" then
                                 local p = GetToolPart(obj)
-                                if p then 
-                                    table.insert(tCache, {Obj = obj, Part = p}) 
-                                end
+                                if p then table.insert(tCache, {Obj = obj, Part = p}) end
                             end
                         end
                     end
@@ -71,27 +64,29 @@ task.spawn(function()
         end
         ToolCache = tCache
 
-        -- 2. ENEMY (GRANNY) SCANNER
+        -- 2. ENEMY SCANNER (UpperTorso Only)
         local fEnemy = GetFolder(PATH_ENEMY)
         if fEnemy then
-            local dCache = {}
+            local eCache = {}
             pcall(function()
-                local dressObj = fEnemy:FindFirstChild(TARGET_DRESS)
-                if dressObj then
-                    if dressObj:IsA("BasePart") then
-                        table.insert(dCache, dressObj)
-                    else
-                        for _, child in ipairs(dressObj:GetDescendants()) do
-                            if child:IsA("BasePart") then
-                                table.insert(dCache, child)
-                            end
+                -- Look specifically for UpperTorso
+                local torso = fEnemy:FindFirstChild(TARGET_PART_NAME)
+                
+                if torso and torso:IsA("BasePart") then
+                    table.insert(eCache, torso)
+                else
+                    -- Fallback: Recursive search if Torso is nested
+                    for _, child in ipairs(fEnemy:GetDescendants()) do
+                        if child.Name == TARGET_PART_NAME and child:IsA("BasePart") then
+                            table.insert(eCache, child)
+                            break -- Found it, stop searching
                         end
                     end
                 end
             end)
-            DressPartCache = dCache
+            EnemyPartCache = eCache
         else
-            DressPartCache = {}
+            EnemyPartCache = {}
         end
 
         task.wait(UPDATE_RATE)
@@ -114,7 +109,7 @@ end
 RunService.Render:Connect(function()
     local camPos = Camera.CFrame.Position
 
-    -- 1. Draw Tools (Green Text)
+    -- 1. Draw Tools (Text)
     for _, data in ipairs(ToolCache) do
         local s, pos = pcall(function() return data.Part.Position end)
         if s and pos then
@@ -125,15 +120,15 @@ RunService.Render:Connect(function()
         end
     end
 
-    -- 2. Draw Granny (Red Mask + Red Text)
-    for _, part in ipairs(DressPartCache) do
+    -- 2. Draw Enemy Torso (3D Box + Text)
+    for _, part in ipairs(EnemyPartCache) do
         local success, cf = pcall(function() return part.CFrame end)
         local success2, size = pcall(function() return part.Size end)
         
         if success and success2 and cf and size then
             local corners = GetCorners(cf, size)
             
-            -- Draw 3D Box Faces
+            -- Draw 3D Faces
             local function DrawFace(i1, i2, i3, i4, normal)
                 local center = (corners[i1] + corners[i3]) * 0.5
                 local dot = vector.dot(normal, center - camPos)
@@ -160,29 +155,17 @@ RunService.Render:Connect(function()
             DrawFace(1, 5, 6, 2, U)
             DrawFace(4, 3, 7, 8, U * -1)
 
-            -- Draw Text "Granny" Above
+            -- Draw "Granny" Text Above Torso
             local centerPos = cf.Position
             local screenPos, vis = Camera:WorldToScreenPoint(centerPos)
-            
             if vis then
-                -- Calculate offset based on part size/distance
                 local dist = vector.magnitude(camPos - centerPos)
                 local offset = (1000 / dist) * (size.Y * 0.5) + 20
-                
                 local textPos = Vector2.new(screenPos.X, screenPos.Y - offset)
-                
-                DrawingImmediate.OutlinedText(
-                    textPos,            -- Position
-                    16,                 -- Size 
-                    COLOR_ENEMY,        -- Red Color
-                    1,                  -- Opacity
-                    "Granny",           -- Text
-                    true,               -- Center
-                    nil                 -- Font
-                )
+                DrawingImmediate.OutlinedText(textPos, 16, COLOR_ENEMY, 1, "Granny", true, nil)
             end
         end
     end
 end)
 
-print("Dynamic Tool & Granny ESP Loaded.")
+print("Tool & Granny ESP Loaded.")
