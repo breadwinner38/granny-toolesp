@@ -1,0 +1,188 @@
+--!optimization 2
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Sploiter13/severefuncs/refs/heads/main/merge.lua"))();
+
+--!strict
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera
+
+-- Configuration
+local UPDATE_RATE = 1.0 
+local PATH_ENEMY = {"Map", "Players", "Enemy"} 
+local TARGET_DRESS = "Dress" 
+
+-- Visuals
+local COLOR_TOOL = Color3.new(0, 1, 0)       -- Green (Tools)
+local COLOR_ENEMY = Color3.new(1, 0, 0)      -- Red (Granny)
+local OPACITY = 0.5 
+
+-- State
+local ToolCache = {} 
+local DressPartCache = {} 
+
+-- Helper: Trace folder
+local function GetFolder(pathArray)
+    local current = Workspace
+    for _, name in ipairs(pathArray) do
+        current = current:FindFirstChild(name)
+        if not current then return nil end
+    end
+    return current
+end
+
+local function GetToolPart(tool: Instance): Instance?
+    local h = tool:FindFirstChild("Handle")
+    if h then return h end
+    for _, c in ipairs(tool:GetDescendants()) do
+        if c:IsA("BasePart") then return c end
+    end
+    return nil
+end
+
+-- SCANNER LOOP
+task.spawn(function()
+    print("Dynamic ESP Scanner Started...")
+    while true do
+        -- 1. DYNAMIC TOOL SCANNER
+        -- Logic: Check Workspace.Map -> [ANY_FOLDER] -> Tools
+        local tCache = {}
+        local mapFolder = Workspace:FindFirstChild("Map")
+        
+        if mapFolder then
+            pcall(function()
+                -- Loop through House, Garage, etc.
+                for _, location in ipairs(mapFolder:GetChildren()) do
+                    -- Check if this location has a "Tools" folder
+                    local toolsContainer = location:FindFirstChild("Tools")
+                    
+                    if toolsContainer then
+                        -- Found a Tools folder, scan it
+                        for _, obj in ipairs(toolsContainer:GetDescendants()) do
+                            if obj.ClassName == "Tool" or obj.ClassName == "Model" then
+                                local p = GetToolPart(obj)
+                                if p then 
+                                    table.insert(tCache, {Obj = obj, Part = p}) 
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+        ToolCache = tCache
+
+        -- 2. ENEMY (GRANNY) SCANNER
+        local fEnemy = GetFolder(PATH_ENEMY)
+        if fEnemy then
+            local dCache = {}
+            pcall(function()
+                local dressObj = fEnemy:FindFirstChild(TARGET_DRESS)
+                if dressObj then
+                    if dressObj:IsA("BasePart") then
+                        table.insert(dCache, dressObj)
+                    else
+                        for _, child in ipairs(dressObj:GetDescendants()) do
+                            if child:IsA("BasePart") then
+                                table.insert(dCache, child)
+                            end
+                        end
+                    end
+                end
+            end)
+            DressPartCache = dCache
+        else
+            DressPartCache = {}
+        end
+
+        task.wait(UPDATE_RATE)
+    end
+end)
+
+-- 3D MATH
+local function GetCorners(cf, size)
+    local pos = cf.Position
+    local R, U, L = cf.RightVector, cf.UpVector, cf.LookVector
+    local sx, sy, sz = size.X/2, size.Y/2, size.Z/2
+    local function c(x,y,z) return pos + (R*(x*sx)) + (U*(y*sy)) + (L*(z*sz)) end
+    return {
+        c(1,1,1), c(-1,1,1), c(-1,-1,1), c(1,-1,1),
+        c(1,1,-1), c(-1,1,-1), c(-1,-1,-1), c(1,-1,-1)
+    }
+end
+
+-- RENDER LOOP
+RunService.Render:Connect(function()
+    local camPos = Camera.CFrame.Position
+
+    -- 1. Draw Tools (Green Text)
+    for _, data in ipairs(ToolCache) do
+        local s, pos = pcall(function() return data.Part.Position end)
+        if s and pos then
+            local sc, vis = Camera:WorldToScreenPoint(pos)
+            if vis then
+                DrawingImmediate.OutlinedText(sc, 13, COLOR_TOOL, 1, data.Obj.Name, true, nil)
+            end
+        end
+    end
+
+    -- 2. Draw Granny (Red Mask + Red Text)
+    for _, part in ipairs(DressPartCache) do
+        local success, cf = pcall(function() return part.CFrame end)
+        local success2, size = pcall(function() return part.Size end)
+        
+        if success and success2 and cf and size then
+            local corners = GetCorners(cf, size)
+            
+            -- Draw 3D Box Faces
+            local function DrawFace(i1, i2, i3, i4, normal)
+                local center = (corners[i1] + corners[i3]) * 0.5
+                local dot = vector.dot(normal, center - camPos)
+                if dot < 0 then
+                    local p1, v1 = Camera:WorldToScreenPoint(corners[i1])
+                    local p2, v2 = Camera:WorldToScreenPoint(corners[i2])
+                    local p3, v3 = Camera:WorldToScreenPoint(corners[i3])
+                    local p4, v4 = Camera:WorldToScreenPoint(corners[i4])
+                    if v1 or v2 or v3 or v4 then
+                        DrawingImmediate.FilledQuad(
+                            Vector2.new(p1.X, p1.Y), Vector2.new(p2.X, p2.Y),
+                            Vector2.new(p3.X, p3.Y), Vector2.new(p4.X, p4.Y),
+                            COLOR_ENEMY, OPACITY
+                        )
+                    end
+                end
+            end
+
+            local R, U, L = cf.RightVector, cf.UpVector, cf.LookVector
+            DrawFace(1, 2, 3, 4, L)
+            DrawFace(6, 5, 8, 7, L * -1)
+            DrawFace(1, 4, 8, 5, R)
+            DrawFace(2, 6, 7, 3, R * -1)
+            DrawFace(1, 5, 6, 2, U)
+            DrawFace(4, 3, 7, 8, U * -1)
+
+            -- Draw Text "Granny" Above
+            local centerPos = cf.Position
+            local screenPos, vis = Camera:WorldToScreenPoint(centerPos)
+            
+            if vis then
+                -- Calculate offset based on part size/distance
+                local dist = vector.magnitude(camPos - centerPos)
+                local offset = (1000 / dist) * (size.Y * 0.5) + 20
+                
+                local textPos = Vector2.new(screenPos.X, screenPos.Y - offset)
+                
+                DrawingImmediate.OutlinedText(
+                    textPos,            -- Position
+                    16,                 -- Size 
+                    COLOR_ENEMY,        -- Red Color
+                    1,                  -- Opacity
+                    "Granny",           -- Text
+                    true,               -- Center
+                    nil                 -- Font
+                )
+            end
+        end
+    end
+end)
+
+print("Dynamic Tool & Granny ESP Loaded.")
